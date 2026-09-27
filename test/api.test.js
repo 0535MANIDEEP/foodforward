@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 
 import { createPool, migrate, reset, ensureDatabase } from '../src/db/client.js';
+import { createHub as createHubRow } from '../src/db/repo.js';
 import { createApp } from '../src/app.js';
 
 /**
@@ -214,8 +215,43 @@ describe('the happy path works end to end', () => {
     assert.equal(impact.status, 200);
     assert.equal(impact.body.totals.collections, 1);
     assert.equal(impact.body.totals.meals, 20);
+    assert.equal(impact.body.totals.kg, 5, '5kg delivered is 5kg, not a tenth of it');
+    // 20 meals at 250g is 5kg. If the weight and the meal count ever disagree
+    // about the same handover, the page is contradicting itself and no other
+    // number on it can be trusted either.
+    assert.equal(
+      impact.body.totals.kg,
+      (impact.body.totals.meals * 250) / 1000,
+      'weight and meal count must describe the same food',
+    );
     assert.ok(impact.body.totals.co2eKg > 0);
     assert.match(impact.body.basis, /completed collections only/i);
+  });
+
+  test('a cancelled handover is reported as excluded, not silently dropped', async () => {
+    // The whole point of excludedNotCollected is that it is a real count. If the
+    // route filtered cancelled rows out before summarising, this would read zero
+    // and the page would imply nothing was ever left out.
+    const s = await makeSupplier();
+    await makeHub();
+    const a = await makeLot(s.id);
+    const b = await makeLot(s.id, { quantityKg: 5, title: 'Cancelled curry' });
+
+    const first = await call(`/api/surplus/${a.id}/assign`, { method: 'POST' });
+    const second = await call(`/api/surplus/${b.id}/assign`, { method: 'POST' });
+
+    await call('/api/collections', {
+      method: 'POST',
+      body: { assignmentId: first.body.assignmentId, collectedKg: 5 },
+    });
+    await call('/api/collections', {
+      method: 'POST',
+      body: { assignmentId: second.body.assignmentId, status: 'cancelled' },
+    });
+
+    const impact = await call('/api/impact');
+    assert.equal(impact.body.totals.collections, 1, 'only the completed one counts');
+    assert.equal(impact.body.excludedNotCollected, 1, 'and the cancellation is still reported');
   });
 
   test('logging the same handover twice is refused, which is the whole point', async () => {
@@ -240,6 +276,40 @@ describe('the happy path works end to end', () => {
     assert.equal(impact.body.totals.collections, 1, 'the meal was not counted twice');
   });
 
+  test('a hub with no category restriction reports that it accepts everything', async () => {
+    // Written straight to the row, because the API's own validation defaults
+    // accepts to the full list. This is the shape the seed script creates, where
+    // an empty column means "no restriction".
+    //
+    // Returning [] would let a client render a hub that accepts nothing, when it
+    // accepts all of it. That is the more dangerous of the two mistakes, because
+    // an empty list looks like a policy.
+    await createHubRow(pool, {
+      name: 'Open Kitchen',
+      organisation: 'Open Trust',
+      contactName: 'Ravi Kumar',
+      phone: '98765000009',
+      city: 'Hyderabad',
+      lat: 17.3899,
+      lon: 78.4983,
+      dailyCapacityMeals: 200,
+      opensAt: '06:00:00',
+      closesAt: '23:00:00',
+    });
+
+    const r = await call('/api/hubs');
+    const hub = r.body.hubs.find((h) => h.name === 'Open Kitchen');
+    assert.ok(hub, 'the hub should be listed');
+    assert.deepEqual(hub.accepts, ['prepared', 'bakery', 'produce', 'dairy', 'meat', 'other']);
+  });
+
+  test('a restricted hub reports only what it takes', async () => {
+    await makeHub({ name: 'Dairy Only', accepts: ['dairy', 'bakery'] });
+    const r = await call('/api/hubs');
+    const hub = r.body.hubs.find((h) => h.name === 'Dairy Only');
+    assert.deepEqual(hub.accepts, ['dairy', 'bakery']);
+  });
+
   test('allocate places a batch and reports what did not fit', async () => {
     const s = await makeSupplier();
     await makeHub({ dailyCapacityMeals: 20 });
@@ -251,6 +321,29 @@ describe('the happy path works end to end', () => {
     assert.equal(r.status, 200);
     assert.equal(r.body.placed.length, 1, 'one 20 meal lot fits in a 20 meal hub');
     assert.equal(r.body.unplaced.length, 2);
+  });
+
+  test('the list endpoint carries a safety verdict for every lot', async () => {
+    // Without this, a lot the rules will refuse is drawn as "awaiting a hub",
+    // which presents food that can never be routed as merely pending. The board
+    // groups on this field, so it belongs on the list, not only the detail.
+    const s = await makeSupplier();
+    await makeHub({ dailyCapacityMeals: 9999 });
+    const ok = await makeLot(s.id, { title: 'Safe curry' });
+    const expired = await makeLot(s.id, { title: 'Old curry', safeUntil: at(-5) });
+    const noExpiry = await makeLot(s.id, { title: 'Mystery curry', safeUntil: null });
+
+    const r = await call('/api/surplus');
+    const byId = new Map(r.body.surplus.map((x) => [x.id, x]));
+
+    for (const lot of [ok, expired, noExpiry]) {
+      assert.ok(byId.get(lot.id)?.safety, `no safety block for ${lot.title}`);
+    }
+    assert.equal(byId.get(ok.id).safety.safe, true);
+    assert.equal(byId.get(expired.id).safety.safe, false);
+    assert.equal(byId.get(expired.id).safety.reasons[0].reason, 'past_safe_use');
+    assert.equal(byId.get(noExpiry.id).safety.safe, false);
+    assert.equal(byId.get(noExpiry.id).safety.reasons[0].reason, 'no_expiry_recorded');
   });
 });
 

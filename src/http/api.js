@@ -21,6 +21,21 @@ import { ping } from '../db/client.js';
 import { apiError, badRequest, notFound, conflict } from './errors.js';
 import { validate, schemas } from './validate.js';
 
+const ALL_CATEGORIES = ['prepared', 'bakery', 'produce', 'dairy', 'meat', 'other'];
+
+/**
+ * What a hub accepts, as a list.
+ *
+ * An empty `accepts` column means no restriction, not nothing. The routing
+ * engine treats it as "all categories", so this expands it to the full list:
+ * returning [] would let a client draw a hub that accepts no food, when it
+ * accepts all of it.
+ */
+function acceptsOf(hub) {
+  const listed = hub.accepts ? String(hub.accepts).split(',').filter(Boolean) : [];
+  return listed.length > 0 ? listed : ALL_CATEGORIES;
+}
+
 /**
  * The API.
  *
@@ -32,11 +47,9 @@ import { validate, schemas } from './validate.js';
  * that admits it.
  */
 
-export function createApi({ pool, gramsPerMeal = 250 } = {}) {
-  const api = Router();
+export function createApi({ pool, gramsPerMeal = 250 } = {}) {  const api = Router();
 
   /* ------------------------------------------------------------------ meta */
-
   api.get('/about', (_req, res) => {
     res.json({
       project: 'FoodForward',
@@ -114,7 +127,9 @@ export function createApi({ pool, gramsPerMeal = 250 } = {}) {
           remainingMeals: Number(h.daily_capacity_meals) - Number(h.committed_meals_today),
           opensAt: h.opens_at,
           closesAt: h.closes_at,
-          accepts: h.accepts ? String(h.accepts).split(',').filter(Boolean) : [],
+          // Already expanded from "no restriction" to the full list by acceptsOf,
+          // so a client can draw the real set rather than implying none.
+          accepts: acceptsOf(h),
           active: h.active === 1,
         })),
       });
@@ -143,19 +158,26 @@ export function createApi({ pool, gramsPerMeal = 250 } = {}) {
     try {
       const rows = await listSurplus(pool, { status: req.query.status ?? null, limit: 100 });
       res.json({
-        surplus: rows.map((r) => ({
-          id: r.id,
-          supplierId: r.supplier_id,
-          title: r.title,
-          category: r.category,
-          quantityKg: Number(r.quantity_kg),
-          safeUntil: r.safe_until ? new Date(r.safe_until).toISOString() : null,
-          status: r.status,
-          refusalReason: r.refusal_reason,
-          pickupOpensAt: r.pickup_opens_at ? new Date(r.pickup_opens_at).toISOString() : null,
-          pickupClosesAt: r.pickup_closes_at ? new Date(r.pickup_closes_at).toISOString() : null,
-          createdAt: r.created_at,
-        })),
+        surplus: rows.map((r) => {
+          const shape = toPlanShape(r);
+          return {
+            id: r.id,
+            supplierId: r.supplier_id,
+            title: r.title,
+            category: r.category,
+            quantityKg: Number(r.quantity_kg),
+            safeUntil: shape.safeUntil,
+            status: r.status,
+            refusalReason: r.refusal_reason,
+            pickupOpensAt: shape.pickupWindow.opensAt,
+            pickupClosesAt: shape.pickupWindow.closesAt,
+            createdAt: r.created_at,
+            // Carried on the list, not just the detail endpoint. Without it a lot
+            // that the safety rules will refuse is shown as "awaiting a hub",
+            // which presents food that can never be routed as merely pending.
+            safety: assessSurplus(shape, new Date()),
+          };
+        }),
       });
     } catch (err) {
       next(err);
@@ -327,25 +349,26 @@ export function createApi({ pool, gramsPerMeal = 250 } = {}) {
     try {
       const rows = await listCollections(pool, { limit: 1000 });
 
-      // Built from the rows every time rather than read off a stored total, so
-      // the number on the page can always be walked back to the collections that
-      // produced it. There is no counter anywhere that can drift.
-      const records = rows
-        .filter((c) => c.status === 'collected')
-        .map((c) =>
-          impactForCollection({
-            collection: {
-              id: c.id,
-              status: c.status,
-              collectedKg: c.collected_kg,
-              collectedMeals: c.collected_meals,
-              collectedAt: c.collected_at,
-            },
-            surplus: { category: c.category, supplierId: c.supplier_id },
-            hub: { id: c.hub_id, name: c.hub_name },
-            gramsPerMeal,
-          }),
-        );
+      // Every collection is passed through, including the cancelled and missed
+      // ones. Filtering them out here would make excludedNotCollected
+      // structurally zero, which reads on the page as "nothing was left out" when
+      // in fact the route is hiding it. impactForCollection already gives a
+      // non completed handover an impact of exactly zero, and counts it, so the
+      // report can say what it deliberately did not include.
+      const records = rows.map((c) =>
+        impactForCollection({
+          collection: {
+            id: c.id,
+            status: c.status,
+            collectedKg: c.collected_kg,
+            collectedMeals: c.collected_meals,
+            collectedAt: c.collected_at,
+          },
+          surplus: { category: c.category, supplierId: c.supplier_id },
+          hub: { id: c.hub_id, name: c.hub_name },
+          gramsPerMeal,
+        }),
+      );
 
       res.json(summariseImpact(records, { from: req.query.from ?? null, to: req.query.to ?? null }));
     } catch (err) {

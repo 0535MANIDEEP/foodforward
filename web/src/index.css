@@ -1,0 +1,130 @@
+/*
+ * Source detection, stated rather than left to the automatic default.
+ *
+ * Tailwind scans every file it can reach from this stylesheet, which includes
+ * responsive.test.js. That test asserts that classes like `md:flex-row` were
+ * generated, and it names them as string literals to do it, so the test file was
+ * quietly supplying the very classes it was checking for. The gate could not
+ * fail: move a class out of the components and behind a variable, the test file
+ * kept the rule alive, and the layout broke silently. Which is the entire bug
+ * this file exists to catch.
+ *
+ * `source(none)` turns the automatic scan off, because the exclusions below only
+ * subtract from a scan that is otherwise still running. Paths are relative to
+ * this stylesheet, which lives in web/src, so the entry point is `../index.html`.
+ */
+@import 'tailwindcss' source(none);
+@source '../index.html';
+@source './**/*.{js,jsx}';
+@source not '../responsive.test.js';
+@source not '../**/*.test.{js,jsx}';
+
+@import '@fontsource/syne/600.css';
+@import '@fontsource/syne/700.css';
+@import '@fontsource/plus-jakarta-sans/400.css';
+@import '@fontsource/plus-jakarta-sans/500.css';
+@import '@fontsource/plus-jakarta-sans/600.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
+@theme {
+  --font-display: 'Syne', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Near black with a faint green cast, so the base reads as the same material
+     as the green and amber signal colours rather than neutral grey beside them. */
+  --color-ink-950: #0a0e0d;
+  --color-ink-900: #111716;
+  --color-ink-850: #17201e;
+  --color-ink-800: #1e2926;
+  --color-ink-700: #27332f;
+  --color-ink-600: #35443e;
+  --color-ink-500: #4d5f58;
+  --color-ink-400: #6b8078;
+  --color-ink-300: #8a9a93;
+  --color-ink-200: #b4c2bc;
+  --color-ink-100: #dce5e1;
+  --color-ink-50: #eef3f0;
+
+  /* Outcomes. Four separable hues, so colour is carrying information rather
+     than decoration, and a status is legible without reading the label. */
+  --color-safe-500: #4ade80;
+  --color-safe-400: #6ee7a0;
+  --color-safe-900: #052e17;
+
+  --color-pending-500: #fbbf24;
+  --color-pending-400: #fcd34d;
+  --color-pending-900: #3a2606;
+
+  --color-refuse-500: #f87171;
+  --color-refuse-400: #fca5a5;
+  --color-refuse-900: #3d0d0d;
+
+  /* The routing engine itself, kept distinct from the outcomes it produces. */
+  --color-engine-500: #a78bfa;
+  --color-engine-400: #c4b5fd;
+  --color-engine-900: #1e1533;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-ink-950);
+    color: var(--color-ink-100);
+    font-family: var(--font-sans);
+    /* The grid is a faint 1px line pattern, not a glow. It gives the page a
+       surface to sit on without competing with the signal colours. */
+    background-image:
+      linear-gradient(to right, rgb(255 255 255 / 0.022) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(255 255 255 / 0.022) 1px, transparent 1px);
+    background-size: 56px 56px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Syne's default tracking is loose at display sizes and the page has several
+     long headings, so it is tightened once here rather than on each one. */
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-engine-500);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::selection {
+    background: var(--color-safe-500);
+    color: var(--color-ink-950);
+  }
+
+  /* Honour the OS setting rather than animating regardless. A dashboard that
+     drifts on load is a dashboard people stop trusting. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Numeric columns line up when the digits are tabular, which is the whole
+   reason the figures are set in mono rather than in the sans. */
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
