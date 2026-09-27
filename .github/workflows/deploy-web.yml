@@ -1,0 +1,116 @@
+name: Deploy the interface to GitHub Pages
+
+# The API is a separate deployment on Render, see render.yaml. This workflow
+# builds and publishes the frontend only, and it is deliberately allowed to
+# publish a bundle whose VITE_API_URL points at nothing: the interface then shows
+# its "API unavailable" state, which is the honest rendering of a missing backend.
+# A build step that refused to publish without a live API would mean the site
+# could not be deployed at all until someone held a Render key.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/deploy-web.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. Two concurrent publishes to Pages race, and the loser
+# silently becomes the live site.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  # The stylesheet gate runs before anything is published, because its whole
+  # subject is classes that Tailwind failed to generate. Publishing a bundle
+  # known to be missing a rule is how a layout breaks without any error.
+  gate:
+    name: Stylesheet gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - name: Assert every class in the source was emitted
+        run: node --test --test-reporter=spec responsive.test.js
+        working-directory: web
+
+  build:
+    name: Build
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+        env:
+          # Empty by default. The repository variable, if set, points at the
+          # deployed API. Relative asset paths in vite.config.js mean the bundle
+          # works from a project path without a rebuild.
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  # The portfolio learned this the hard way: a deploy step that reports success
+  # has only proved that a file was uploaded. This checks the site actually
+  # serves the application, by asserting on the built asset inside the deployed
+  # document rather than on the status code, which is 200 for GitHub's 404 page
+  # as well.
+  verify:
+    name: Verify the deployed site serves the app
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the deployed HTML references the real bundle
+        run: |
+          set -euo pipefail
+          url="https://0535manideep.github.io/foodforward/"
+          html=$(curl -fsSL --retry 5 --retry-delay 3 "$url")
+
+          if echo "$html" | grep -qi 'assets/index-.*\.js'; then
+            echo "serves the built bundle"
+          else
+            echo "::error::deployed page has no app bundle, so it is a 404 page being served as 200"
+            echo "$html" | head -20
+            exit 1
+          fi
+
+          # The title has to be ours too, because a 404 page can carry a stale
+          # title from a previous deploy.
+          if ! echo "$html" | grep -q 'FoodForward'; then
+            echo "::error::deployed page is not the FoodForward app"
+            exit 1
+          fi
+
+          echo "deployed at $url"
