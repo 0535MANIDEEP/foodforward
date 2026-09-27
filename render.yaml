@@ -1,0 +1,59 @@
+# Render blueprint for the FoodForward API.
+#
+# A blueprint, not a deployment. Applying it is a deliberate act by whoever owns
+# the account, because a free Render database expires and somebody has to notice.
+#
+# The MySQL instance is the part that matters. The paper names MySQL and the
+# safety constraints in schema.sql are MySQL behaviour: CHECK constraints and
+# the UNIQUE index on assignments.surplus_id are what make double routing
+# impossible at the storage layer, and they are the reason this project is not on
+# a database that ignores them.
+
+services:
+  - type: web
+    name: foodforward-api
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: GRAMS_PER_MEAL
+        value: "250"
+      # The frontend's origin. A browser sends no Origin for same-origin and curl
+      # requests, so those pass regardless; this list is for the deployed site.
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: MYSQL_HOST
+        fromDatabase:
+          name: foodforward-db
+          property: host
+      - key: MYSQL_PORT
+        fromDatabase:
+          name: foodforward-db
+          property: port
+      - key: MYSQL_USER
+        fromDatabase:
+          name: foodforward-db
+          property: user
+      - key: MYSQL_PASSWORD
+        fromDatabase:
+          name: foodforward-db
+          property: password
+      - key: MYSQL_DATABASE
+        fromDatabase:
+          name: foodforward-db
+          property: database
+
+databases:
+  - name: foodforward-db
+    databaseName: foodforward
+    user: foodforward
+    # Leave plan off to get a free instance. It expires, so the dashboard needs a
+    # calendar reminder, and this comment is the only place that says so.
+    ipAllowList: []
