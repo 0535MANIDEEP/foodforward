@@ -63,6 +63,28 @@ Impact is rebuilt from collection rows on every request rather than read from a
 stored total, so the number on the page can always be walked back to the
 handovers that produced it. There is no counter anywhere that can drift.
 
+## Check the claims yourself
+
+```bash
+git clone https://github.com/0535MANIDEEP/foodforward.git
+cd foodforward
+npm run test:domain
+```
+
+That is the whole setup. **No `npm install`, no database, no configuration.** 69
+tests, and they are the ones that matter: the safety refusals, the routing rules and
+the impact accounting. `src/domain/` imports nothing from `src/db/` or `src/http/`
+and nothing outside Node's standard library, which is why that is possible and why
+the same rules could sit behind different storage without being rewritten.
+
+If those pass, the safety claim is not a claim. If you want the database half:
+
+```bash
+npm install
+npm run migrate
+npm test          # 148, including 79 against a real MySQL server
+```
+
 ## Running it
 
 Requires Node 20+ and a MySQL 8+ server. No Docker, no ORM.

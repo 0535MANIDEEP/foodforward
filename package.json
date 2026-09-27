@@ -8,8 +8,9 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "test": "npm run test:api && npm run test:web",
-    "test:api": "node --test --test-reporter=spec \"test/**/*.test.js\"",
+    "test": "npm run test:domain && npm run test:db && npm run test:web",
+    "test:domain": "node --test --test-reporter=spec test/safety.test.js test/routing.test.js test/impact.test.js",
+    "test:db": "node --test --test-reporter=spec test/db.test.js test/api.test.js",
     "test:web": "node --test --test-reporter=spec web/responsive.test.js",
     "dev": "node --watch src/app.js",
     "start": "node src/app.js",
