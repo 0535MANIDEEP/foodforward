@@ -80,4 +80,11 @@ export const api = {
   recordCollection: (body) => post('/api/collections', body),
 };
 
-export const apiBase = BASE || 'same origin (dev proxy)';
+/**
+ * What to tell the reader when the API cannot be reached.
+ *
+ * Deliberately does not say "dev proxy": this string ships in production too, and
+ * a deployed bundle built without VITE_API_URL has no dev proxy, so naming one
+ * there would send somebody looking for something that does not exist.
+ */
+export const apiBase = BASE || 'not set, so requests go to this origin';
